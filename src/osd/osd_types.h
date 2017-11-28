@@ -3973,7 +3973,7 @@ public:
       // new object.
       if (is_missing_divergent_item) {  // use iterator
 	rmissing.erase((missing_it->second).need.version);
-	missing[e.soid] = item(e.version, eversion_t(), false, false, e.is_delete());     // .have = nil
+	missing[e.soid] = item(e.version, eversion_t(), e.is_delete(), false, false);     // .have = nil
 	(missing_it->second).need = e.version;
 	(missing_it->second).have = eversion_t();
 	(missing_it->second).clean_regions.merge(e.clean_regions);
