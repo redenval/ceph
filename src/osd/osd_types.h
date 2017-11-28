@@ -3737,7 +3737,7 @@ struct pg_missing_item {
   } flags;
   pg_missing_item() : flags(FLAG_NONE) {}
   explicit pg_missing_item(eversion_t n) : need(n){}  // have no old version
-  pg_missing_item(eversion_t n, eversion_t h, bool old_style = false, bool new_object = false, bool is_delete = false) : need(n), have(h) {
+  pg_missing_item(eversion_t n, eversion_t h, bool is_delete = false, bool old_style = false, bool new_object = false) : need(n), have(h) {
     if (old_style)
       clean_regions.mark_fully_dirty();
     if (new_object)
@@ -3961,7 +3961,7 @@ public:
       // new object.
       if (is_missing_divergent_item) {  // use iterator
 	rmissing.erase((missing_it->second).need.version);
-	missing[e.soid] = item(e.version, eversion_t(), e.is_delete());     // .have = nil
+	missing[e.soid] = item(e.version, eversion_t(), false, false, e.is_delete());     // .have = nil
 	(missing_it->second).need = e.version;
 	(missing_it->second).have = eversion_t();
 	(missing_it->second).clean_regions.merge(e.clean_regions);
@@ -4017,7 +4017,7 @@ public:
 
   void add(const hobject_t& oid, eversion_t need, eversion_t have,
 	   bool mark_dirty = true) {
-    missing[oid] = item(need, have, mark_dirty, have == eversion_t(), false);
+    missing[oid] = item(need, have, false, mark_dirty, have == eversion_t());
     rmissing[need.version] = oid;
     tracker.changed(oid);
   }
@@ -4077,17 +4077,19 @@ public:
     if ((features & CEPH_OSD_PARTIAL_RECOVERY) == 0) {
       ENCODE_START(3, 2, bl);
       map<hobject_t, old_item> tmp;
-      for (map<hobject_t, item>::const_iterator i = missing.begin(); i != missing.end(); ++i) {
+      for (map<hobject_t, item>::const_iterator i = missing.begin();
+	  i != missing.end(); ++i) {
 	tmp[i->first] = old_item(i->second.need, i->second.have);
       }
       ::encode(tmp, bl);
       ENCODE_FINISH(bl);
       return;
     }
-    ENCODE_START(4, 2, bl);//vaee
+    /*ENCODE_START(4, 2, bl)
     ::encode(missing, bl);
-    ENCODE_FINISH(bl);
+    ENCODE_FINISH(bl);*/
   }
+
   void decode(bufferlist::iterator &bl, int64_t pool = -1) {
     for (auto const &i: missing)
       tracker.changed(i.first);
@@ -4102,7 +4104,7 @@ public:
       // copy old item style to new style
       for (map<hobject_t, old_item>::iterator i = tmp.begin();
            i != tmp.end(); ++i) {
-        missing[i->first] = item(i->second.need, i->second.have, true);
+        missing[i->first] = item(i->second.need, i->second.have, false, true);
       }
     } else {
       ::decode(missing, bl);

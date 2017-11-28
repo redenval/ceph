@@ -1253,7 +1253,7 @@ void ReplicatedBackend::calc_head_subsets(
 
   interval_set<uint64_t> cloning;
   interval_set<uint64_t> prev;
-  hobject c = head;
+  hobject_t c = head;
   if (size)
     prev.insert(0, size);
 
@@ -1272,7 +1272,7 @@ void ReplicatedBackend::calc_head_subsets(
 	     << " overlap " << prev << dendl;
   }
   
-  cloning.intersectiong_of(data_subset);
+  cloning.intersection_of(data_subset);
   if(cloning.empty()) {
     dout(10) << "skipping clone, nothing needs to clone" << dendl;
     return;
@@ -1286,7 +1286,7 @@ void ReplicatedBackend::calc_head_subsets(
   }
 
   // what's left for us to push?
-  clone_subset[c] = cloning;
+  clone_subsets[c] = cloning;
   data_subset.subtract(cloning);
 
   dout(10) << "calc_head_subsets " << head
@@ -1629,7 +1629,7 @@ void ReplicatedBackend::submit_push_data(
   bool complete,
   bool clear_omap,
   bool cache_dont_need,
-  interval_set<uint64_t> $data_zeros,
+  interval_set<uint64_t> &data_zeros,
   const interval_set<uint64_t> &intervals_included,
   bufferlist data_included,
   bufferlist omap_header,
@@ -1654,7 +1654,7 @@ void ReplicatedBackend::submit_push_data(
     if (!complete) {
       t->remove(coll, ghobject_t(target_oid));
       t->touch(coll, ghobject_t(target_oid));
-      bufferlist bv = attrs[OI_ATTR];
+      bufferlist bv = attrs.at(OI_ATTR);
       object_info_t oi(bv);
       t->set_alloc_hint(coll, ghobject_t(target_oid),
 	  oi.expected_object_size,
