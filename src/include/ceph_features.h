@@ -168,6 +168,7 @@ DEFINE_CEPH_FEATURE(61, 1, RESERVED2)          // unused, but slow down!
 DEFINE_CEPH_FEATURE(62, 1, RESERVED)           // do not use; used as a sentinal
 DEFINE_CEPH_FEATURE_DEPRECATED(63, 1, RESERVED_BROKEN, LUMINOUS) // client-facing
 
+#define CEPH_OSD_PARTIAL_RECOVERY  (1ULL<<60) /* recover partial extents for objects */
 
 /*
  * Features supported.  Should be everything above.
@@ -230,6 +231,7 @@ DEFINE_CEPH_FEATURE_DEPRECATED(63, 1, RESERVED_BROKEN, LUMINOUS) // client-facin
 	 CEPH_FEATURE_RESEND_ON_SPLIT |		\
 	 CEPH_FEATURE_RADOS_BACKOFF |		\
 	 CEPH_FEATURE_OSD_RECOVERY_DELETES | \
+	 CEPH_OSD_PARTIAL_RECOVERY | \
 	 0ULL)
 
 #define CEPH_FEATURES_SUPPORTED_DEFAULT  CEPH_FEATURES_ALL
