@@ -3736,15 +3736,13 @@ struct pg_missing_item {
     FLAG_DELETE = 1,
   } flags;
   pg_missing_item() : flags(FLAG_NONE) {}
-  explicit pg_missing_item(eversion_t n) : need(n), flags(FLAG_NONE) {}  // have no old version
-  pg_missing_item(eversion_t n, eversion_t h, bool is_delete=false) : need(n), have(h) {
-    set_delete(is_delete);
-  }
-  pg_missing_item(eversion_t n, eversion_t h, bool old_style = false, bool new_object = false) : need(n), have(h) {
+  explicit pg_missing_item(eversion_t n) : need(n){}  // have no old version
+  pg_missing_item(eversion_t n, eversion_t h, bool old_style = false, bool new_object = false, bool is_delete = false) : need(n), have(h) {
     if (old_style)
       clean_regions.mark_fully_dirty();
     if (new_object)
       clean_regions.mark_object_new();
+    set_delete(is_delete);
   }
   void encode(bufferlist& bl, uint64_t features) const {
     if (HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) {
@@ -4018,8 +4016,8 @@ public:
   }
 
   void add(const hobject_t& oid, eversion_t need, eversion_t have,
-	   bool is_delete) {
-    missing[oid] = item(need, have, is_delete);
+	   bool mark_dirty = true) {
+    missing[oid] = item(need, have, mark_dirty, have == eversion_t(), false);
     rmissing[need.version] = oid;
     tracker.changed(oid);
   }
@@ -4077,16 +4075,16 @@ public:
 
   void encode(bufferlist &bl, uint64_t features) const {
     if ((features & CEPH_OSD_PARTIAL_RECOVERY) == 0) {
-      ENCODE_START(4, 2, bl);
-      map<hobject_t, old_item, hobject_t::ComparatorWithDefault> tmp;
-      for (map<hobject_t, item, hobject_t::ComparatorWithDefault>::const_iterator i = missing.begin(); i != missing.end(); ++i) {
+      ENCODE_START(3, 2, bl);
+      map<hobject_t, old_item> tmp;
+      for (map<hobject_t, item>::const_iterator i = missing.begin(); i != missing.end(); ++i) {
 	tmp[i->first] = old_item(i->second.need, i->second.have);
       }
       ::encode(tmp, bl);
       ENCODE_FINISH(bl);
       return;
     }
-    ENCODE_START(5, 2, bl);
+    ENCODE_START(4, 2, bl);//vaee
     ::encode(missing, bl);
     ENCODE_FINISH(bl);
   }
@@ -4099,10 +4097,10 @@ public:
       ::decode(may_include_deletes, bl);
     }
     else if (struct_v <= 3) {
-       map<hobject_t, old_item, hobject_t::ComparatorWithDefault> tmp;
+       map<hobject_t, old_item> tmp;
       ::decode(tmp, bl);
       // copy old item style to new style
-      for (map<hobject_t, old_item, hobject_t::ComparatorWithDefault>::iterator i = tmp.begin();
+      for (map<hobject_t, old_item>::iterator i = tmp.begin();
            i != tmp.end(); ++i) {
         missing[i->first] = item(i->second.need, i->second.have, true);
       }

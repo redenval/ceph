@@ -1596,7 +1596,7 @@ int ReplicatedBackend::prep_push(
   get_parent()->begin_peer_recover(peer, soid);
   map<pg_shard_t, pg_missing_t>::const_iterator pmissing_iter =
     get_parent()->get_shard_missing().find(peer);
-  map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::const_iterator missing_iter =
+  map<hobject_t, pg_missing_t::item>::const_iterator missing_iter =
     pmissing_iter->second.get_items().find(soid);
   assert(missing_iter != pmissing_iter->second.get_items().end());
   // take note.

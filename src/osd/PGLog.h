@@ -1378,12 +1378,13 @@ public:
 
 	set<hobject_t> did;
 	set<hobject_t> checked;
-	set<hobject_t, hobject_t::BitwiseComparator> del;
+	set<hobject_t> del;
 	set<hobject_t> skipped;
 	for (list<pg_log_entry_t>::reverse_iterator i = log.log.rbegin();
 	     i != log.log.rend();
-	     ++i) {	
-	  if (cmp(i->soid, info.last_backfill, info.last_backfill_bitwise) > 0)
+	     ++i) {
+	  if(i->soid > info.last_backfill)	
+	  //if (cmp(i->soid, info.last_backfill, info.last_backfill_bitwise) > 0)
 	    continue;
 	  if (i->is_error())
 	    continue;
