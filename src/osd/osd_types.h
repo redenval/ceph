@@ -4081,7 +4081,7 @@ public:
 	  i != missing.end(); ++i) {
 	tmp[i->first] = old_item(i->second.need, i->second.have);
       }
-      ::encode(tmp, bl);
+      ::encode(tmp, bl, features);
       ENCODE_FINISH(bl);
       return;
     }
