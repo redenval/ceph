@@ -3759,8 +3759,9 @@ struct pg_missing_item {
       // legacy unversioned encoding
       ::encode(need, bl);
       ::encode(have, bl);
-      ::encode(clean_regions, bl);
     }
+    if(HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY)) 
+      ::encode(clean_regions, bl);
   }
   void decode(bufferlist::iterator& bl) {
     eversion_t e;
@@ -4072,24 +4073,51 @@ public:
     missing.clear();
     rmissing.clear();
   }
-
+/*
   void encode(bufferlist &bl, uint64_t features) const {
-    if ((features & CEPH_OSD_PARTIAL_RECOVERY) == 0) {
+    if ((features & CEPH_FEATURES_OSD_PARTIAL_RECOVERY) == 0) {
       ENCODE_START(3, 2, bl);
       map<hobject_t, old_item> tmp;
       for (map<hobject_t, item>::const_iterator i = missing.begin();
 	  i != missing.end(); ++i) {
 	tmp[i->first] = old_item(i->second.need, i->second.have);
       }
-      ::encode(tmp, bl, features);
+      ::encoded(tmp, bl);
       ENCODE_FINISH(bl);
       return;
     }
-    /*ENCODE_START(4, 2, bl)
-    ::encode(missing, bl);
-    ENCODE_FINISH(bl);*/
+    ENCODE_START(4, 2, bl)
+    ::encode(missing, bl, features);
+    ENCODE_FINISH(bl);
   }
 
+   void encode(bufferlist &bl) const {
+     ENCODE_START(4, 2, bl);
+     ::encode(missing, bl, may_include_deletes ? CEPH_FEATURE_OSD_RECOVERY_DELETES : 0);
+     ::encode(may_include_deletes, bl);
+     ENCODE_FINISH(bl);
+   }
+  */
+
+  void encode(bufferlist &bl, uint64_t features) const {
+    if((features & CEPH_FEATURE_OSD_PARTIAL_RECOVERY) == 0) { //不支持partial recovery
+      ENCODE_START(4, 2, bl);
+      map<hobject_t, old_item> tmp;
+      for (map<hobject_t, item>::const_iterator i = missing.begin();
+	  i != missing.end(); ++i) {
+	tmp[i->first] = old_item(i->second.need, i->second.have);
+      }
+      ::encode(tmp, bl, may_include_deletes ? CEPH_FEATURE_OSD_RECOVERY_DELETES : 0);
+      ::encode(may_include_deletes, bl);
+      ENCODE_FINISH(bl);
+    }
+    else {
+      ENCODE_START(5, 2, bl)
+      ::encode(missing, bl, features);
+      ::encode(may_include_deletes, bl);
+      ENCODE_FINISH(bl);
+    }
+  }
   void decode(bufferlist::iterator &bl, int64_t pool = -1) {
     for (auto const &i: missing)
       tracker.changed(i.first);
