@@ -22,11 +22,12 @@ import json
 import sys
 import time
 import threading
+import socket
 
 import cherrypy
 import jinja2
 
-from mgr_module import MgrModule, CommandResult
+from mgr_module import MgrModule, MgrStandbyModule, CommandResult
 
 from types import OsdMap, NotFound, Config, FsMap, MonMap, \
     PgSummary, Health, MonStatus
@@ -45,7 +46,7 @@ log = logging.getLogger("dashboard")
 LOG_BUFFER_SIZE = 30
 
 # cherrypy likes to sys.exit on error.  don't let it take us down too!
-def os_exit_noop():
+def os_exit_noop(*args, **kwargs):
     pass
 
 os._exit = os_exit_noop
@@ -60,6 +61,54 @@ def recurse_refs(root, path):
             recurse_refs(i, path + "[%d]" % n)
 
     log.info("%s %d (%s)" % (path, sys.getrefcount(root), root.__class__))
+
+def get_prefixed_url(url):
+    return global_instance().url_prefix + url
+
+
+
+class StandbyModule(MgrStandbyModule):
+    def serve(self):
+        server_addr = self.get_localized_config('server_addr', '::')
+        server_port = self.get_localized_config('server_port', '7000')
+        if server_addr is None:
+            raise RuntimeError('no server_addr configured; try "ceph config-key set mgr/dashboard/server_addr <ip>"')
+        log.info("server_addr: %s server_port: %s" % (server_addr, server_port))
+        cherrypy.config.update({
+            'server.socket_host': server_addr,
+            'server.socket_port': int(server_port),
+            'engine.autoreload.on': False
+        })
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        jinja_loader = jinja2.FileSystemLoader(current_dir)
+        env = jinja2.Environment(loader=jinja_loader)
+
+        module = self
+
+        class Root(object):
+            @cherrypy.expose
+            def index(self):
+                active_uri = module.get_active_uri()
+                if active_uri:
+                    log.info("Redirecting to active '{0}'".format(active_uri))
+                    raise cherrypy.HTTPRedirect(active_uri)
+                else:
+                    template = env.get_template("standby.html")
+                    return template.render(delay=5)
+
+        cherrypy.tree.mount(Root(), "/", {})
+        log.info("Starting engine...")
+        cherrypy.engine.start()
+        log.info("Waiting for engine...")
+        cherrypy.engine.wait(state=cherrypy.engine.states.STOPPED)
+        log.info("Engine done.")
+
+    def shutdown(self):
+        log.info("Stopping server...")
+        cherrypy.engine.wait(state=cherrypy.engine.states.STARTED)
+        cherrypy.engine.stop()
+        log.info("Stopped server")
 
 
 class Module(MgrModule):
@@ -98,6 +147,9 @@ class Module(MgrModule):
         self.pool_stats = defaultdict(lambda: defaultdict(
             lambda: collections.deque(maxlen=10)))
 
+        # A prefix for all URLs to use the dashboard with a reverse http proxy
+        self.url_prefix = ''
+
     @property
     def rados(self):
         """
@@ -107,8 +159,7 @@ class Module(MgrModule):
         if self._rados:
             return self._rados
 
-        from mgr_module import ceph_state
-        ctx_capsule = ceph_state.get_context()
+        ctx_capsule = self.get_context()
         self._rados = rados.Rados(context=ctx_capsule)
         self._rados.connect()
 
@@ -374,7 +425,7 @@ class Module(MgrModule):
                 "id": fs_id,
                 "name": mdsmap['fs_name'],
                 "client_count": client_count,
-                "clients_url": "/clients/{0}/".format(fs_id),
+                "clients_url": get_prefixed_url("/clients/{0}/".format(fs_id)),
                 "ranks": rank_table,
                 "pools": pools_table
             },
@@ -382,35 +433,40 @@ class Module(MgrModule):
             "versions": mds_versions
         }
 
+    def _prime_log(self):
+        def load_buffer(buf, channel_name):
+            result = CommandResult("")
+            self.send_command(result, "mon", "", json.dumps({
+                "prefix": "log last",
+                "format": "json",
+                "channel": channel_name,
+                "num": LOG_BUFFER_SIZE
+                }), "")
+            r, outb, outs = result.wait()
+            if r != 0:
+                # Oh well.  We won't let this stop us though.
+                self.log.error("Error fetching log history (r={0}, \"{1}\")".format(
+                    r, outs))
+            else:
+                try:
+                    lines = json.loads(outb)
+                except ValueError:
+                    self.log.error("Error decoding log history")
+                else:
+                    for l in lines:
+                        buf.appendleft(l)
+
+        load_buffer(self.log_buffer, "cluster")
+        load_buffer(self.audit_buffer, "audit")
+        self.log_primed = True
+
     def serve(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
 
         jinja_loader = jinja2.FileSystemLoader(current_dir)
         env = jinja2.Environment(loader=jinja_loader)
 
-        result = CommandResult("")
-        self.send_command(result, "mon", "", json.dumps({
-            "prefix":"log last",
-            "format": "json"
-            }), "")
-        r, outb, outs = result.wait()
-        if r != 0:
-            # Oh well.  We won't let this stop us though.
-            self.log.error("Error fetching log history (r={0}, \"{1}\")".format(
-                r, outs))
-        else:
-            try:
-                lines = json.loads(outb)
-            except ValueError:
-                self.log.error("Error decoding log history")
-            else:
-                for l in lines:
-                    if l['channel'] == 'audit':
-                        self.audit_buffer.appendleft(l)
-                    else:
-                        self.log_buffer.appendleft(l)
-
-        self.log_primed = True
+        self._prime_log()
 
         class EndPoint(object):
             def _health_data(self):
@@ -440,7 +496,7 @@ class Module(MgrModule):
                 rbd_pools = sorted([
                     {
                         "name": name,
-                        "url": "/rbd_pool/{0}/".format(name)
+                        "url": get_prefixed_url("/rbd_pool/{0}/".format(name))
                     }
                     for name in data
                 ], key=lambda k: k['name'])
@@ -455,7 +511,7 @@ class Module(MgrModule):
                     {
                         "id": f['id'],
                         "name": f['mdsmap']['fs_name'],
-                        "url": "/filesystem/{0}/".format(f['id'])
+                        "url": get_prefixed_url("/filesystem/{0}/".format(f['id']))
                     }
                     for f in fsmap.data['filesystems']
                 ]
@@ -479,6 +535,7 @@ class Module(MgrModule):
                 }
 
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
@@ -542,11 +599,12 @@ class Module(MgrModule):
                     "clients": clients,
                     "fs_name": fs_name,
                     "fscid": fscid,
-                    "fs_url": "/filesystem/" + fscid_str + "/"
+                    "fs_url": get_prefixed_url("/filesystem/" + fscid_str + "/")
                 }
 
                 template = env.get_template("clients.html")
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(self._toplevel_data(), indent=2),
@@ -591,6 +649,7 @@ class Module(MgrModule):
                 }
 
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
@@ -617,6 +676,7 @@ class Module(MgrModule):
                 content_data = self._rbd_mirroring()
 
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
@@ -643,6 +703,7 @@ class Module(MgrModule):
                 content_data = self._rbd_iscsi()
 
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
@@ -658,6 +719,7 @@ class Module(MgrModule):
             def health(self):
                 template = env.get_template("health.html")
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(self._toplevel_data(), indent=2),
@@ -668,6 +730,7 @@ class Module(MgrModule):
             def servers(self):
                 template = env.get_template("servers.html")
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info=cherrypy.request.path_info,
                     toplevel_data=json.dumps(self._toplevel_data(), indent=2),
@@ -821,6 +884,17 @@ class Module(MgrModule):
                         ret[k1][k2] = sorted_dict
                 return ret
 
+        url_prefix = self.get_config('url_prefix')
+        if url_prefix == None:
+            url_prefix = ''
+        else:
+            if len(url_prefix) != 0:
+                if url_prefix[0] != '/':
+                    url_prefix = '/'+url_prefix
+                if url_prefix[-1] == '/':
+                    url_prefix = url_prefix[:-1]
+        self.url_prefix = url_prefix
+
         server_addr = self.get_localized_config('server_addr', '::')
         server_port = self.get_localized_config('server_port', '7000')
         if server_addr is None:
@@ -831,6 +905,16 @@ class Module(MgrModule):
             'server.socket_port': int(server_port),
             'engine.autoreload.on': False
         })
+
+        osdmap = self.get_osdmap()
+        log.info("latest osdmap is %d" % osdmap.get_epoch())
+
+        # Publish the URI that others may use to access the service we're
+        # about to start serving
+        self.set_uri("http://{0}:{1}/".format(
+            socket.getfqdn() if server_addr == "::" else server_addr,
+            server_port
+        ))
 
         static_dir = os.path.join(current_dir, 'static')
         conf = {
@@ -882,6 +966,7 @@ class Module(MgrModule):
                 toplevel_data = self._toplevel_data()
 
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info='/osd' + cherrypy.request.path_info,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
@@ -923,7 +1008,7 @@ class Module(MgrModule):
                 result['up'] = osd_info['up']
                 result['in'] = osd_info['in']
 
-                result['url'] = "/osd/perf/{0}".format(osd_id)
+                result['url'] = get_prefixed_url("/osd/perf/{0}".format(osd_id))
 
                 return result
 
@@ -936,7 +1021,6 @@ class Module(MgrModule):
                 for server in servers:
                     hostname = server['hostname']
                     services = server['services']
-                    first = True
                     for s in services:
                         if s["type"] == "osd":
                             osd_id = int(s["id"])
@@ -948,18 +1032,18 @@ class Module(MgrModule):
                             summary = self._osd_summary(osd_id,
                                                         osd_map.osds_by_id[osd_id])
 
-                            if first:
-                                # A little helper for rendering
-                                summary['first'] = True
-                                first = False
                             result[hostname].append(summary)
+
+                    result[hostname].sort(key=lambda a: a['id'])
+                    if len(result[hostname]):
+                        result[hostname][0]['first'] = True
 
                 global_instance().log.warn("result.size {0} servers.size {1}".format(
                     len(result), len(servers)
                 ))
 
                 # Return list form for convenience of rendering
-                return result.items()
+                return sorted(result.items(), key=lambda a: a[0])
 
             @cherrypy.expose
             def index(self):
@@ -976,16 +1060,18 @@ class Module(MgrModule):
                 }
 
                 return template.render(
+                    url_prefix = global_instance().url_prefix,
                     ceph_version=global_instance().version,
                     path_info='/osd' + cherrypy.request.path_info,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
                     content_data=json.dumps(content_data, indent=2)
                 )
 
-        cherrypy.tree.mount(Root(), "/", conf)
-        cherrypy.tree.mount(OSDEndpoint(), "/osd", conf)
+        cherrypy.tree.mount(Root(), get_prefixed_url("/"), conf)
+        cherrypy.tree.mount(OSDEndpoint(), get_prefixed_url("/osd"), conf)
 
-        log.info("Starting engine...")
+        log.info("Starting engine on {0}:{1}...".format(
+            server_addr, server_port))
         cherrypy.engine.start()
         log.info("Waiting for engine...")
         cherrypy.engine.block()
