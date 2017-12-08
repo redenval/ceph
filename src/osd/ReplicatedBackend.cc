@@ -1651,9 +1651,9 @@ void ReplicatedBackend::submit_push_data(
   }
 
   if (first) {
-    if (!complete) {
       t->remove(coll, ghobject_t(target_oid));
       t->touch(coll, ghobject_t(target_oid));
+    if (!complete) {
       bufferlist bv = attrs.at(OI_ATTR);
       object_info_t oi(bv);
       t->set_alloc_hint(coll, ghobject_t(target_oid),
