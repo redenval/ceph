@@ -1138,14 +1138,10 @@ public:
     }
     /// Set multiple xattrs of an object
     void setattrs(const coll_t& cid, const ghobject_t& oid, const map<string,bufferlist>& attrset) {
-      coll_t c_col = _get_coll_id(cid);
-      ghobject_t g_obj = _get_object_id(oid);
-      if(!c_col || !g_obj)
-	return;
       Op* _op = _get_next_op();
       _op->op = OP_SETATTRS;
-      _op->cid = c_col;
-      _op->oid = g_obj;
+      _op->cid = _get_coll_id(cid);
+      _op->oid = _get_object_id(oid);
       ::encode(attrset, data_bl);
       data.ops++;
     }
