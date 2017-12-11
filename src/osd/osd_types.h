@@ -3714,31 +3714,6 @@ inline ostream& operator<<(ostream& out, const pg_log_t& log)
   return out;
 }
 
-
-/**
- * pg_missing_t - summary of missing objects.
- *
- *  kept in memory, as a supplement to pg_log_t
- *  also used to pass missing info in messages.
- */
-/*
-struct pg_missing_item_old {
-  eversion_t need, have;
-  pg_missing_item_old() {}
-  explicit pg_missing_item_old(eversion_t n) : need(n) {}  // have no old version
-  pg_missing_item_old(eversion_t n, eversion_t h) : need(n), have(h) {}
-
-  void encode(bufferlist& bl) const {
-    ::encode(need, bl);
-    ::encode(have, bl);
-  }
-  void decode(bufferlist::iterator& bl) {
-    ::decode(need, bl);
-    ::decode(have, bl);
-  }
-};
-WRITE_CLASS_ENCODER(pg_missing_item_old);
-*/
 struct pg_missing_item {
   eversion_t need, have;
   ObjectCleanRegions clean_regions;
@@ -3908,7 +3883,6 @@ public:
 template <bool TrackChanges>
 class pg_missing_set : public pg_missing_const_i {
   using item = pg_missing_item;
-  //using old_item = pg_missing_item_old;
   map<hobject_t, item> missing;  // oid -> (need v, have v)
   map<version_t, hobject_t> rmissing;  // v -> oid
   ChangeTracker<TrackChanges> tracker;
