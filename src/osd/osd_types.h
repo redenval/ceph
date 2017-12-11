@@ -45,7 +45,6 @@
 #include "librados/ListObjectImpl.h"
 #include "compressor/Compressor.h"
 #include <atomic>
-#include <iostream>
 #define CEPH_OSD_ONDISK_MAGIC "ceph osd volume v026"
 
 #define CEPH_OSD_FEATURE_INCOMPAT_BASE CompatSet::Feature(1, "initial feature set(~v.18)")
@@ -3722,7 +3721,7 @@ inline ostream& operator<<(ostream& out, const pg_log_t& log)
  *  kept in memory, as a supplement to pg_log_t
  *  also used to pass missing info in messages.
  */
-
+/*
 struct pg_missing_item_old {
   eversion_t need, have;
   pg_missing_item_old() {}
@@ -3739,7 +3738,7 @@ struct pg_missing_item_old {
   }
 };
 WRITE_CLASS_ENCODER(pg_missing_item_old);
-
+*/
 struct pg_missing_item {
   eversion_t need, have;
   ObjectCleanRegions clean_regions;
@@ -3757,61 +3756,39 @@ struct pg_missing_item {
     set_delete(is_delete);
   }
   void encode(bufferlist& bl, uint64_t features) const {
-    std::cout << "vae pg_missing_item encode features " << features << std::endl;
-    /*if (HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) {
-    // encoding a zeroed eversion_t to differentiate between this and
-    // legacy unversioned encoding - a need value of 0'0 is not
-    // possible. This can be replaced with the legacy encoding
-    // macros post-luminous.
-    eversion_t e;
-    ::encode(e, bl);
-    ::encode(need, bl);
-    ::encode(have, bl);
-    ::encode(static_cast<uint8_t>(flags), bl);
-    } */
-
-//00 -->support all
-//01 -->support delete
-//10 -->support partial
-//11 -->both not support 
-
+    //encoding two new eversion_t type variables to differentiate OSD_RECOVERY_DELETES, OSD_PARTIAL_RECOVERY and
+    //legacy unversioned encoding   
     eversion_t  e, l;
-    if((HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { // 00
+    if((HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { 
     ::encode(e, bl);
-    ::encode(l, bl);
+    ::encode(l, bl);// 0 0 -->support all
     ::encode(need, bl);
     ::encode(have, bl);
     ::encode(static_cast<uint8_t>(flags), bl);
     ::encode(clean_regions, bl);
     }
-    if((HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (!HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { // 01
+    if((HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (!HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { 
     ::encode(e, bl);
-    ::encode(need, bl);
+    ::encode(need, bl);// 0 need -->support delete
     ::encode(have, bl);
     ::encode(static_cast<uint8_t>(flags), bl);
     }
-    if((!HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { // 10
+    if((!HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { 
     ::encode(need, bl);
-    ::encode(e, bl);
+    ::encode(e, bl);//need 0 -->support partial
     ::encode(have, bl);
     ::encode(clean_regions, bl);
     }
-    if((!HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (!HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { // 11
+    if((!HAVE_FEATURE(features, OSD_RECOVERY_DELETES)) && (!HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) {
     ::encode(need, bl);
-    ::encode(have, bl);
+    ::encode(have, bl);//need have ->both not support
     }
   }
   void decode(bufferlist::iterator& bl) {
-    std::cout  << "vae pg_missing_item decode  "  << std::endl;
-  
-//00 -->support all
-//01 -->support delete
-//10 -->support partial
-//11 -->both not support 
     eversion_t e, l;
     ::decode(e, bl);
     ::decode(l, bl);
-    if((e == eversion_t()) &&  (l == eversion_t())) { //00
+    if((e == eversion_t()) &&  (l == eversion_t())) { //0 0 -->support all
       ::decode(need, bl);
       ::decode(have, bl);
         uint8_t f;
@@ -3819,19 +3796,19 @@ struct pg_missing_item {
 	flags = static_cast<missing_flags_t>(f);
 	::decode(clean_regions, bl);
     }
-    if((e == eversion_t()) &&  (l != eversion_t())) { //01
+    if((e == eversion_t()) &&  (l != eversion_t())) { //0 need support delete
 	need = l;
 	::decode(have, bl);
         uint8_t f;
 	::decode(f, bl);
 	flags = static_cast<missing_flags_t>(f);
     }
-    if((e != eversion_t()) &&  (l == eversion_t())) { //10
+    if((e != eversion_t()) &&  (l == eversion_t())) { //need 0 -->support partial
       e = need;
       ::decode(have, bl);
       ::decode(clean_regions, bl);
     }
-    if((e != eversion_t()) && (l != eversion_t())) { //support delete recovery
+    if((e != eversion_t()) && (l != eversion_t())) { //need have -->both not support
        need = e;
        have = l;
     }
@@ -3931,7 +3908,7 @@ public:
 template <bool TrackChanges>
 class pg_missing_set : public pg_missing_const_i {
   using item = pg_missing_item;
-  using old_item = pg_missing_item_old;
+  //using old_item = pg_missing_item_old;
   map<hobject_t, item> missing;  // oid -> (need v, have v)
   map<version_t, hobject_t> rmissing;  // v -> oid
   ChangeTracker<TrackChanges> tracker;
@@ -4130,68 +4107,20 @@ public:
     missing.clear();
     rmissing.clear();
   }
-/*
-  void encode(bufferlist &bl, uint64_t features) const {
-    if ((features & CEPH_FEATURES_OSD_PARTIAL_RECOVERY) == 0) {
-      ENCODE_START(3, 2, bl);
-      map<hobject_t, old_item> tmp;
-      for (map<hobject_t, item>::const_iterator i = missing.begin();
-	  i != missing.end(); ++i) {
-	tmp[i->first] = old_item(i->second.need, i->second.have);
-      }
-      ::encoded(tmp, bl);
-      ENCODE_FINISH(bl);
-      return;
-    }
-    ENCODE_START(4, 2, bl)
-    ::encode(missing, bl, features);
-    ENCODE_FINISH(bl);
-  }
-
-   void encode(bufferlist &bl) const {
-     ENCODE_START(4, 2, bl);
-     ::encode(missing, bl, may_include_deletes ? CEPH_FEATURE_OSD_RECOVERY_DELETES : 0);
-     ::encode(may_include_deletes, bl);
-     ENCODE_FINISH(bl);
-   }
-  */
 
   void encode(bufferlist &bl, uint64_t features) const {
-    std::cout << "vae pg_missing_set encode features " << features << std::endl;
-   /* if(!(HAVE_FEATURE(features, OSD_PARTIAL_RECOVERY))) { //不支持partial recovery
-      ENCODE_START(4, 2, bl);
-      map<hobject_t, old_item> tmp;
-      for (map<hobject_t, item>::const_iterator i = missing.begin();
-	  i != missing.end(); ++i) {
-	tmp[i->first] = old_item(i->second.need, i->second.have);
-      }
-      ::encode(tmp, bl, may_include_deletes ? CEPH_FEATURE_OSD_RECOVERY_DELETES : 0);
-      ::encode(may_include_deletes, bl);
-      ENCODE_FINISH(bl);
-    }
-    else {//支持partial recovery
-     */ ENCODE_START(5, 2, bl)
+      ENCODE_START(5, 2, bl)
       ::encode(missing, bl, features);
       ::encode(may_include_deletes, bl);
       ENCODE_FINISH(bl);
-    //}
   }
   void decode(bufferlist::iterator &bl, int64_t pool = -1) {
     std::cout << "vae pg_missing_set decode " << std::endl;
     for (auto const &i: missing)
       tracker.changed(i.first);
     DECODE_START_LEGACY_COMPAT_LEN(5, 2, 2, bl);
-    /*if (struct_v <= 4) {
-   	 map<hobject_t, old_item> tmp;
-	 ::decode(tmp, bl);
-	 // copy old item style to new style
-	 for (map<hobject_t, old_item>::iterator i = tmp.begin();
-	     i != tmp.end(); ++i) {
-	   missing[i->first] = item(i->second.need, i->second.have, false, true);
-	 }
-    }*/
     ::decode(missing, bl);
-    if (struct_v >= 4) {//vae
+    if (struct_v >= 4) {
       ::decode(may_include_deletes, bl);
     }
 

@@ -1232,7 +1232,7 @@ void ReplicatedBackend::calc_head_subsets(
   uint64_t size = obc->obs.oi.size;
   if (size)
     data_subset.insert(0, size);
-  if (parent->min_peer_features() & CEPH_FEATURE_OSD_PARTIAL_RECOVERY) {
+  if (HAVE_FEATURE(parent->min_peer_features(), OSD_RECOVERY_DELETES)) {
     const auto it = missing.get_items().find(head);
     assert(it != missing.get_items().end());
     data_subset.intersection_of(it->second.clean_regions.get_dirty_regions());
@@ -1459,7 +1459,7 @@ void ReplicatedBackend::prepare_pull(
     // pulling head or unversioned object.
     // always pull the whole thing.
     recovery_info.copy_subset.insert(0, (uint64_t)-1);
-    if (parent->min_peer_features() & CEPH_FEATURE_OSD_PARTIAL_RECOVERY)
+   if (HAVE_FEATURE(parent->min_peer_features(), OSD_RECOVERY_DELETES)) 
       recovery_info.copy_subset.intersection_of(missing_iter->second.clean_regions.get_dirty_regions());
     recovery_info.size = ((uint64_t)-1);
     recovery_info.object_exist = missing_iter->second.clean_regions.object_is_exist();
@@ -1474,7 +1474,7 @@ void ReplicatedBackend::prepare_pull(
   op.recovery_info.version = v;
   op.recovery_progress.data_complete = false;
   op.recovery_progress.omap_complete = !missing_iter->second.clean_regions.omap_is_dirty() &&
-  (parent->min_peer_features() & CEPH_FEATURE_OSD_PARTIAL_RECOVERY);
+  HAVE_FEATURE(parent->min_peer_features(), OSD_RECOVERY_DELETES);
   op.recovery_progress.data_recovered_to = 0;
   op.recovery_progress.first = true;
 
