@@ -12426,7 +12426,7 @@ void PrimaryLogPG::scan_range(
 	 * between the collection_list_partial and here.  This can happen
 	 * for the first item in the range, which is usually last_backfill.
 	 */
-      if (r == -ENOENT || r == -61)//vae
+      if (r == -ENOENT)
 	continue;
       
       assert(r >= 0);
