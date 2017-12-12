@@ -21,6 +21,7 @@
 #include "osd_types.h"
 #include "os/ObjectStore.h"
 #include <list>
+using namespace std;
 
 #define PGLOG_INDEXED_OBJECTS          (1 << 0)
 #define PGLOG_INDEXED_CALLER_OPS       (1 << 1)
@@ -757,9 +758,10 @@ public:
 	log.complete_to = log.log.end();
 	info.last_complete = info.last_update;
       }
-      auto oldest_need = missing.get_oldest_need();
       while (log.complete_to != log.log.end()) {
-	if (oldest_need <= log.complete_to->version)
+	if (missing.get_items().at(
+	      missing.get_rmissing().begin()->second
+	      ).need <= log.complete_to->version)
 	  break;
 	if (info.last_complete < log.complete_to->version)
 	  info.last_complete = log.complete_to->version;
@@ -772,12 +774,12 @@ public:
 
   void reset_complete_to(pg_info_t *info) {
     log.complete_to = log.log.begin();
-    auto oldest_need = missing.get_oldest_need();
-    if (oldest_need != eversion_t()) {
-      while (log.complete_to->version < oldest_need) {
-        assert(log.complete_to != log.log.end());
-        ++log.complete_to;
-      }
+    while (!missing.get_items().empty() && log.complete_to->version <
+	   missing.get_items().at(
+	     missing.get_rmissing().begin()->second
+	     ).need) {
+      assert(log.complete_to != log.log.end());
+      ++log.complete_to;
     }
     assert(log.complete_to != log.log.end());
     if (log.complete_to == log.log.begin()) {
@@ -1255,15 +1257,17 @@ public:
   void read_log_and_missing(
     ObjectStore *store,
     coll_t pg_coll,
-    ghobject_t pgmeta_oid,
+    coll_t log_coll,
+    ghobject_t log_oid,
     const pg_info_t &info,
+    bool force_rebuild_missing,
     ostringstream &oss,
     bool tolerate_divergent_missing_log,
     bool debug_verify_stored_missing = false
     ) {
     return read_log_and_missing(
-      store, pg_coll, pgmeta_oid, info,
-      log, missing, oss,
+      store, pg_coll, log_coll, log_oid, info,
+      log, missing, force_rebuild_missing, oss,
       tolerate_divergent_missing_log,
       &clear_divergent_priors,
       this,
@@ -1275,10 +1279,12 @@ public:
   static void read_log_and_missing(
     ObjectStore *store,
     coll_t pg_coll,
-    ghobject_t pgmeta_oid,
+    coll_t log_coll,
+    ghobject_t log_oid,
     const pg_info_t &info,
     IndexedLog &log,
     missing_type &missing,
+    bool force_rebuild_missing,
     ostringstream &oss,
     bool tolerate_divergent_missing_log,
     bool *clear_divergent_priors = nullptr,
@@ -1287,21 +1293,20 @@ public:
     bool debug_verify_stored_missing = false
     ) {
     ldpp_dout(dpp, 20) << "read_log_and_missing coll " << pg_coll
-		       << " " << pgmeta_oid << dendl;
+		       << " log_oid " << log_oid << dendl;
 
     // legacy?
     struct stat st;
-    int r = store->stat(pg_coll, pgmeta_oid, &st);
+    int r = store->stat(log_coll, log_oid, &st);
     assert(r == 0);
     assert(st.st_size == 0);
 
     // will get overridden below if it had been recorded
     eversion_t on_disk_can_rollback_to = info.last_update;
     eversion_t on_disk_rollback_info_trimmed_to = eversion_t();
-    ObjectMap::ObjectMapIterator p = store->get_omap_iterator(pg_coll,
-							      pgmeta_oid);
+    ObjectMap::ObjectMapIterator p = store->get_omap_iterator(log_coll, log_oid);
     map<eversion_t, hobject_t> divergent_priors;
-    bool must_rebuild = false;
+    bool must_rebuild = force_rebuild_missing;
     missing.may_include_deletes = false;
     list<pg_log_entry_t> entries;
     list<pg_log_dup_t> dups;
@@ -1373,20 +1378,25 @@ public:
 
 	set<hobject_t> did;
 	set<hobject_t> checked;
+	set<hobject_t> del;
 	set<hobject_t> skipped;
 	for (list<pg_log_entry_t>::reverse_iterator i = log.log.rbegin();
 	     i != log.log.rend();
 	     ++i) {
-	  if (!debug_verify_stored_missing && i->version <= info.last_complete) break;
-	  if (i->soid > info.last_backfill)
+	  if(i->soid > info.last_backfill)	
+	  //if (cmp(i->soid, info.last_backfill, info.last_backfill_bitwise) > 0)
 	    continue;
 	  if (i->is_error())
 	    continue;
+	  if(!del.count(i->soid))
+	    missing.merge(*i);
 	  if (did.count(i->soid)) continue;
 	  did.insert(i->soid);
-
-	  if (!missing.may_include_deletes && i->is_delete())
-	    continue;
+	  if (i->is_delete()){
+	    del.insert(i->soid);
+	    if(!missing.may_include_deletes)
+	      continue;
+	    }
 
 	  bufferlist bv;
 	  int r = store->getattr(
@@ -1398,7 +1408,8 @@ public:
 	    object_info_t oi(bv);
 	    if (oi.version < i->version) {
 	      ldpp_dout(dpp, 15) << "read_log_and_missing  missing " << *i
-				 << " (have " << oi.version << ")" << dendl;
+				 << " (have " << oi.version << ")"
+				 << " clean_regions " << i->clean_regions << dendl;
 	      if (debug_verify_stored_missing) {
 		auto miter = missing.get_items().find(i->soid);
 		assert(miter != missing.get_items().end());
@@ -1409,6 +1420,7 @@ public:
 		checked.insert(i->soid);
 	      } else {
 		missing.add(i->soid, i->version, oi.version, i->is_delete());
+		missing.merge(*i);
 	      }
 	    }
 	  } else {
