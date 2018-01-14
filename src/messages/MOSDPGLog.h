@@ -76,6 +76,7 @@ public:
   }
 
   void encode_payload(uint64_t features) override {
+    using ceph::encode;
     ::encode(epoch, payload);
     ::encode(info, payload);
     ::encode(log, payload);

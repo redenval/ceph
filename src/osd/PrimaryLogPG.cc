@@ -7380,26 +7380,15 @@ int PrimaryLogPG::_rollback_to(OpContext *ctx, ceph_osd_op& op)
 
       // Adjust the cached objectcontext
       maybe_create_new_object(ctx, true);
-      if (obs.oi.has_extents()) {
-        ctx->delta_stats.num_bytes -= obs.oi.extents.size();
-        obs.oi.extents.clear();
-      } else {
-        ctx->delta_stats.num_bytes -= obs.oi.size;
-      }
-      if (rollback_to->obs.oi.has_extents()) {
-        ctx->delta_stats.num_bytes += rollback_to->obs.oi.extents.size();
-        // transfer extents map too
-        assert(obs.oi.has_extents());
-        obs.oi.extents = rollback_to->obs.oi.extents;
-	ctx->clean_regions.mark_data_region_dirty(0, rollback_to->obs.oi.extents.size());
-      } else {
-        ctx->delta_stats.num_bytes += rollback_to->obs.oi.size;
-        if (obs.oi.has_extents() && rollback_to->obs.oi.size) {
-          obs.oi.extents.insert(0, rollback_to->obs.oi.size);
-	  ctx->clean_regions.mark_data_region_dirty(0, rollback_to->obs.oi.size);
-        }
-      }
       ctx->clean_regions.mark_omap_dirty();
+      ctx->delta_stats.num_bytes -= obs.oi.size;
+      ctx->delta_stats.num_bytes += rollback_to->obs.oi.size;
+      if(rollback_to->obs.oi.has_extents()) {
+	ctx->clean_regions.mark_data_region_dirty(0, rollback_to->obs.oi.extents.size());
+      }
+      else if(obs.oi.has_extents() && rollback_to->obs.oi.size) {
+	ctx->clean_regions.mark_data_region_dirty(0, rollback_to->obs.oi.size);
+      }
       obs.oi.size = rollback_to->obs.oi.size;
       if (rollback_to->obs.oi.is_data_digest())
 	obs.oi.set_data_digest(rollback_to->obs.oi.data_digest);
